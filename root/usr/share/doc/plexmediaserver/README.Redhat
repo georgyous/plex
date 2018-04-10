@@ -1,0 +1,21 @@
+Readme for Plex Media Server
+------------------------------
+
+This is the Readme for the Plex Media Server RPM.
+
+The RPM included startup files for both systemd and chkconfig.
+
+To start/stop Plex Media Server on SystemV systems use:
+
+sudo /etc/init.d/plexmediaserver start
+sudo /etc/init.d/plexmediaserver stop
+sudo /etc/init.d/plexmediaserver restart
+
+To start/stop Plex Media Server on Systemd systems use:
+
+sudo service plexmediaserver start
+sudo service plexmediaserver stop
+
+To get help with Plex Media Server go to https://forums.plex.tv, https://support.plex.tv.
+
+ZiGGiMoN <ziggimon@foo.bar>  Sat, 23 May 2013 12:17:33 +0100

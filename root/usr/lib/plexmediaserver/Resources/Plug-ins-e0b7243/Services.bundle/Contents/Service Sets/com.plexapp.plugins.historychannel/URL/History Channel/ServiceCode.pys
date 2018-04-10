@@ -1,0 +1,128 @@
+SHOWS_URL = 'http://wombatapi.aetv.com/shows2/history'
+EPISODES_URL = 'http://mediaservice.aetndigital.com/SDK_v2/show_titles/episode/history?show_name=%s'
+SIGNATURE_URL = 'http://servicesaetn-a.akamaihd.net/jservice/video/components/get-signed-signature?url=%s'
+SMIL_NS = {"a":"http://www.w3.org/2005/SMIL21/Language"}
+RE_SHOW_VIA_URL = Regex('shows\/(.+)\/videos')
+RE_SHOW_VIA_IMAGE = Regex('\/History_(.+)_[0-9]+_')
+HEADERS = {'User-Agent' : 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11) AppleWebKit/601.1.56 (KHTML, like Gecko) Version/9.0 Safari/601.1.56'}
+
+AudioStreamObject.language_code = Locale.Language.English
+
+####################################################################################################
+def NormalizeURL(url):
+
+    return url.split('?')[0]
+
+####################################################################################################
+def MetadataObjectForURL(url):
+
+    episode_data = GetEpisodeData(url) 
+
+    return EpisodeObject(
+        title = episode_data['title'],
+        summary = episode_data['description'],
+        thumb = episode_data['thumbnailImage2xURL'] if 'thumbnailImage2xURL' in episode_data else None,
+        show = episode_data['seriesName'],
+        duration = episode_data['totalVideoDuration'],
+        originally_available_at = Datetime.ParseDate(episode_data['originalAirDate'].split('T')[0]).date() if 'originalAirDate' in episode_data else None,
+        index = int(episode_data['episode']) if 'episode' in episode_data else None,
+        season = int(episode_data['season']) if 'season' in episode_data else None
+    )
+
+
+####################################################################################################
+@deferred
+def MediaObjectsForURL(url):
+    
+    episode_data = GetEpisodeData(url)    
+    unsigned_smil_url = episode_data['playURL_HLS'].split('?')[0]
+    signature = HTTP.Request(SIGNATURE_URL % String.Quote(unsigned_smil_url)).content
+    smil_url = '%s?switch=hls&assetTypes=medium_video_ak&mbr=true&metafile=true&sig=%s' % (unsigned_smil_url, signature)
+    smil = XML.ElementFromURL(smil_url)
+
+    # Check for expired
+    expired = smil.xpath('//*[@*[contains(., "Expired") or contains(., "expired")]]')
+    if len(expired) > 0:
+        raise Ex.MediaExpired
+    
+    max_resolution = 0
+    hls_url = None
+    for video in smil.xpath('//a:video', namespaces=SMIL_NS):
+        try:
+            resolution = int(video.get('height'))
+        except:
+            continue
+        
+        if resolution > max_resolution:
+            max_resolution = resolution
+            hls_url = video.get('src')
+    
+    return [
+        MediaObject(
+            video_resolution = max_resolution,
+            audio_channels = 2,
+            optimized_for_streaming = True,
+            parts = [PartObject(key = HTTPLiveStreamURL(hls_url))]
+        )
+    ]
+
+##########################################################################################
+def GetEpisodeData(url):
+    
+    # First try using url
+    try:
+        show = RE_SHOW_VIA_URL.search(url).groups()[0]
+        show_id = show.replace('-', ' ').title()
+    except:
+        raise Ex.MediaNotAvailable
+    
+    json_data = JSON.ObjectFromURL(EPISODES_URL % String.Quote(show_id), headers=HEADERS, cacheTime=CACHE_1HOUR)
+        
+    if len(json_data['Items']) < 1:
+        # ... else, try to find the data via twitter tag
+        try:
+            element = HTML.ElementFromURL(url, cacheTime=CACHE_1HOUR)
+        except:
+            raise Ex.MediaNotAvailable
+        
+        show_id = None
+        try:
+            show_twitter_hash = element.xpath("//*[@id='twitter-hash']/text()")[0].strip()
+            shows_data = JSON.ObjectFromURL(SHOWS_URL, headers=HEADERS, cacheTime=CACHE_1HOUR)
+    
+            for show in shows_data:
+                if show['twitterTag'].lower().replace("#", "") == show_twitter_hash.lower().replace("#", ""):
+                    show_id = show['showID']
+                    break
+        except:
+            # else, final chance: try via image url
+            try:
+                thumb = element.xpath('//meta[@property="og:image"]/@content')[0]
+                show_id = RE_SHOW_VIA_IMAGE.search(thumb).groups()[0].replace('-',' ')
+            except:
+                pass
+    
+        if not show_id:
+            raise Ex.MediaNotAvailable
+
+        json_data = JSON.ObjectFromURL(EPISODES_URL % String.Quote(show_id), headers=HEADERS, cacheTime=CACHE_1HOUR)
+
+    for item in json_data['Items']:
+        if item['siteUrl'] == url:
+            return item
+
+    raise Ex.MediaNotAvailable
+
+####################################################################################################
+def TestURLs():
+
+  test_urls = []
+  data = HTML.ElementFromURL('http://www.history.com/shows/pawn-stars/videos')
+
+  for url in data.xpath('//li[contains(@class,"slider-item")]//a[starts-with(@data-href, "http")]/@data-href'):
+    test_urls.append(url)
+
+    if len(test_urls) > 2:
+      break
+
+  return test_urls

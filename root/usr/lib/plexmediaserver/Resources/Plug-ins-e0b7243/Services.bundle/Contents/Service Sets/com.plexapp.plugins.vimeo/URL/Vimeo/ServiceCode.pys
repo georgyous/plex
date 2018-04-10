@@ -1,0 +1,144 @@
+API_URL = 'https://vimeo.com/api/v2/video/%s.json'
+RE_VIMEO_ID = Regex('(\d{6,})')
+RE_CONTROL_CHARS = Regex(u'[\u0000-\u001F]')
+
+PLAYER_URL = 'https://player.vimeo.com/video/%s'
+RE_JSON = Regex('var t=(\{.+?\});')
+
+HTTP_HEADERS = {
+	'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/36.0.1985.125 Safari/537.36'
+}
+
+####################################################################################################
+def NormalizeURL(url):
+
+	vimeo_id = RE_VIMEO_ID.search(url)
+
+	if vimeo_id:
+		return 'https://vimeo.com/%s' % vimeo_id.group(1)
+
+####################################################################################################
+def MetadataObjectForURL(url):
+
+	json_obj = None
+
+	try:
+		json_obj = JSON.ObjectFromURL(API_URL % url.split('/')[-1], cacheTime=CACHE_1HOUR, headers=HTTP_HEADERS)[0]
+	except Ex.HTTPError, e:
+		if e.code == 403:
+			raise Ex.MediaNotAuthorized
+		elif e.code == 404:
+			try:
+				page = HTTP.Request(PLAYER_URL % url.split('/')[-1]).content
+				json = RE_JSON.search(page).group(1)
+				json_obj = JSON.ObjectFromString(json)
+
+				return VideoClipObject(
+					title = json_obj['video']['title'],
+					thumb = Resource.ContentsOfURLWithFallback(json_obj['video']['thumbs']['640'])
+				)
+
+			except:
+				raise Ex.MediaNotAvailable
+		else:
+			raise Ex.MediaNotAvailable
+	except:
+		raise Ex.MediaNotAvailable
+
+	if not json_obj:
+		raise Ex.MediaNotAvailable
+
+	title = json_obj['title']
+
+	summary = RE_CONTROL_CHARS.sub('', json_obj['description'])
+	summary = String.StripTags(summary)
+
+	thumb = json_obj['thumbnail_large']
+	originally_available_at = Datetime.ParseDate(json_obj['upload_date'])
+
+	duration = None
+	if isinstance(json_obj['duration'], int) and json_obj['duration'] > 0:
+		duration = json_obj['duration'] * 1000
+
+	tags = []
+	if json_obj['tags']:
+		tags = json_obj['tags'].split(', ')
+
+	directors = [json_obj['user_name']]
+
+	return VideoClipObject(
+		title = title,
+		summary = summary,
+		thumb = Resource.ContentsOfURLWithFallback(thumb),
+		originally_available_at = originally_available_at.date(),
+		year = originally_available_at.year,
+		duration = duration,
+		tags = tags,
+		directors = directors
+	)
+
+####################################################################################################
+def MediaObjectsForURL(url):
+
+	return [
+		MediaObject(
+			parts = [
+				PartObject(
+					key = HTTPLiveStreamURL(Callback(PlayVideo, url=url))
+				)
+			],
+			video_resolution = '1080',
+			audio_channels = 2
+		)
+	]
+
+####################################################################################################
+@indirect
+def PlayVideo(url, **kwargs):
+
+	if not url:
+		raise Ex.MediaNotAvailable
+
+	json_obj = None
+
+	try:
+		html = HTML.ElementFromURL(url, cacheTime=0, headers=HTTP_HEADERS)
+		config_url = html.xpath('//div[contains(@class, "player") and @data-config-url]/@data-config-url')[0].replace('&amp;', '&')
+	except Ex.HTTPError, e:
+		if e.code == 403:
+			raise Ex.MediaNotAuthorized
+		elif e.code == 404:
+			try:
+				page = HTTP.Request(PLAYER_URL % url.split('/')[-1]).content
+				json = RE_JSON.search(page).group(1)
+				json_obj = JSON.ObjectFromString(json)
+
+			except:
+				raise Ex.MediaNotAvailable
+		else:
+			raise Ex.MediaNotAvailable
+	except:
+		raise Ex.MediaNotAvailable
+
+	if not json_obj:
+
+		try:
+			json_obj = JSON.ObjectFromURL(config_url, cacheTime=0, headers=HTTP_HEADERS)
+		except Ex.HTTPError, e:
+			if e.code == 403:
+				raise Ex.MediaNotAuthorized
+			elif e.code == 404:
+				raise Ex.MediaNotAvailable
+			else:
+				raise Ex.MediaNotAvailable
+		except:
+			raise Ex.MediaNotAvailable
+
+	if 'files' in json_obj['request'] and 'hls' in json_obj['request']['files']:
+		return IndirectResponse(VideoClipObject, key=json_obj['request']['files']['hls']['url'])
+	else:
+		raise Ex.MediaNotAvailable
+
+####################################################################################################
+# Queue fix (PlayVideoIndirect was renamed to PlayVideo at some point)
+PlayVideoIndirect = PlayVideo

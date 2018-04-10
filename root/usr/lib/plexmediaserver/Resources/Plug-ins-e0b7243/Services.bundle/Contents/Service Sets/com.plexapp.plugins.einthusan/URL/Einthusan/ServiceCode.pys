@@ -1,0 +1,73 @@
+BASE_URL = 'http://www.einthusan.com'
+CDN_URL = 'http://cdn.einthusan.com/geturl/%s/hd/London%%2CWashington%%2CToronto%%2CDallas%%2CSan%%2CSydney/'
+
+####################################################################################################
+def NormalizeURL(url):
+
+	return url
+
+####################################################################################################
+def MetadataObjectForURL(url):
+
+	try:
+		html = HTML.ElementFromURL(url)
+	except:
+		raise Ex.MediaNotAvailable
+
+	title = html.xpath('//a[@class="movie-title"]/text()')
+
+	if len(title) < 1:
+		raise Ex.MediaNotAvailable
+
+	try:
+		thumb = html.xpath('//a[@class="movie-cover-wrapper"]/img/@src')[0]
+		if not thumb.startswith('http'):
+			thumb = '%s/%s' % (BASE_URL, thumb.split('/',1)[1])
+	except:
+		thumb = html.xpath('//div[@class="video-object-thumb"]/a/@src')[0]
+		if not thumb.startswith('http'):
+			thumb = '%s/%s' % (BASE_URL, thumb.split('/',1)[1])
+	# for some strange reason einthusan sometimes uses urls with un-escaped spaces in them
+	thumb = thumb.replace(' ', '%20')
+
+	summary = html.xpath('//div[@class="movie-description"]//p[@class="desc_body"]/text()')[0]
+
+	return VideoClipObject(
+		title = title[0],
+		summary = summary,
+		thumb = Resource.ContentsOfURLWithFallback(url=thumb)
+	)
+
+####################################################################################################
+def MediaObjectsForURL(url):
+
+	return [
+		MediaObject(
+			container = Container.MP4,
+			video_codec = VideoCodec.H264,
+			video_resolution = '720',
+			audio_codec = AudioCodec.AAC,
+			audio_channels = 2,
+			optimized_for_streaming = True,
+			parts = [
+				PartObject(key=Callback(PlayVideo, url=url))
+			]
+		)
+	]
+
+####################################################################################################
+@indirect
+def PlayVideo(url, **kwargs):
+
+	video_id = url.split('&id=')[-1].split('&')[0]
+	cdn_url = CDN_URL % (video_id)
+
+	try:
+		data = HTTP.Request(cdn_url).content
+	except:
+		raise Ex.MediaNotAvailable
+
+	if data:
+		return IndirectResponse(VideoClipObject, key=data)
+	else:
+		raise Ex.MediaNotAvailable
