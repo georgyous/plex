@@ -17,6 +17,6 @@ services:
     hostname: plex.anyhost.eu.org
     network_mode: "bridge"
     volumes:
-      - /home/plex/database:/plex
+      - /home/plex/database:/database
       - /home/plex/data:/data
-      - /transcode
+      - /home/plex/transcode:/transcode
